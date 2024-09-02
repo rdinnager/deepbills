@@ -4,9 +4,12 @@ conflict_prefer("filter", "dplyr")
 conflict_prefer("save.image", "imager")
 conflict_prefer("select", "dplyr")
 conflict_prefer("%<-%", "zeallot")
+conflicts_prefer(dplyr::select)
+conflicts_prefer(yardstick::spec)
 
 library(future)
 options(future.globals.onReference = "error")
+options(torch.serialization_version = 2)
 
 ## Load your R files
 lapply(list.files("./R", full.names = TRUE), source)
@@ -22,7 +25,17 @@ tar_plan(
   
   tar_target(avonet_birdtree, read_csv("data/AVONET3_BirdTree.csv")),
   
+  tar_target(bird_beak_pca, read_csv("data/41586_2017_BFnature21074_MOESM80_ESM.csv")),
+  
   tar_target(clads_tree, read.tree("data/clads_tree.tre")),
+  
+  tar_target(bad_birds, read_csv("data/beak_mesh_pngs.csv") |>
+               mutate(label = map_chr(str_split(name, "_"), 
+                                      ~ paste(.x[1:2], collapse = "_"))) |>
+               dplyr::select(label) |>
+               dplyr::slice(read_csv("data/bad_meshes.csv") |>
+                        pull(bad_mesh_num)) |>
+               pull(label)),
   
   tar_target(bird_beak_avonet, bird_beak_codes %>%
                filter(is_tip) %>%
@@ -52,6 +65,21 @@ tar_plan(
   tar_target(two_stage_cvae, run_cvae(bird_beak_avonet),
              format = "torch"),
   
+  tar_target(two_stage_cvae_ai64, run_cvae(bird_beak_avonet |>
+                                             filter(!label %in% bad_birds)),
+             format = "torch"),
+  
+  tar_target(two_stage_vae, run_vae(bird_beak_avonet)),
+  
+  # tar_target(vae_file, two_stage_vae$vae_file, 
+  #            format = "file"),
+  
+  tar_target(two_stage_vae_latents, get_vae_latents(two_stage_vae_mod,
+                                                    bird_beak_avonet)),
+  
+  tar_target(two_stage_vae_mod, torch_load(two_stage_vae_file),
+             format = "torch"),
+  
   tar_target(trophic_levs, bird_beak_avonet %>%
                select(Trophic.Niche) %>%
                mutate(Trophic.Niche = factor(Trophic.Niche)) %>%
@@ -69,7 +97,17 @@ tar_plan(
                                                         bird_beak_avonet),
              pattern = map(trophic_levs2, niche_pal)),
   
+  tar_target(trophic_latent_samples_ai64, get_latent_samples(trophic_levs2,
+                                                        two_stage_cvae_ai64,
+                                                        niche_pal,
+                                                        bird_beak_avonet),
+             pattern = map(trophic_levs2, niche_pal)),
+  
   tar_target(trophic_latent_samples_ims, trophic_latent_samples$image,
+             pattern = map(trophic_latent_samples),
+             iteration = "list"),
+  
+  tar_target(trophic_latent_samples_ims_ai64, trophic_latent_samples_ai64$image,
              pattern = map(trophic_latent_samples),
              iteration = "list"),
   
@@ -304,6 +342,7 @@ tar_plan(
                       Trophic.Niche,
                       starts_with("latent_")) %>%
                mutate(codes = scale(across(starts_with("latent_"), ~ .x))) %>%
+               filter(!label %in% bad_birds) %>%
                select(label, Trophic.Niche, codes)),
   
   tar_target(trophic_niche_umap_2, umap(trophic_niche_dat_all %>% pull(codes),
@@ -344,7 +383,13 @@ tar_plan(
   
   tar_target(pl_dat_unsupervised, trophic_niche_umap_2_unsupervised$embedding %>%
                as.data.frame() %>%
-               mutate(Trophic.Niche = as.factor(trophic_niche_dat_all$Trophic.Niche)) %>%
+               mutate(Trophic.Niche = as.factor(trophic_niche_dat_all$Trophic.Niche),
+                      Order = bird_beak_avonet |> 
+                        filter(!label %in% bad_birds) |>
+                        pull(Order3),
+                      Species = bird_beak_avonet |> 
+                        filter(!label %in% bad_birds) |>
+                        pull(label)) %>%
                rename(`UMAP Axis 1` = V1, `UMAP Axis 2` = V2)),
   
   tar_target(niche_pal, createPalette(nlevels(pl_dat$Trophic.Niche),
@@ -353,6 +398,8 @@ tar_plan(
   tar_target(trophic_niche_umap_plot, make_trophic_niche_umap_plot(pl_dat, niche_pal)),
   
   tar_target(trophic_niche_umap_unsupervised_plot, make_trophic_niche_umap_plot(pl_dat_unsupervised, niche_pal)),
+  
+  tar_target(trophic_niche_umap_unsupervised_plot2, make_trophic_niche_umap_plot2(pl_dat_unsupervised, niche_pal)),
   
   tar_target(trophic_niche_umap_unsupervised_density_plot, make_trophic_niche_umap_density_plot(pl_dat_unsupervised, niche_pal)),
   
@@ -366,20 +413,172 @@ tar_plan(
              pattern = map(trophic_niche_dat),
              iteration = "list"),
   
-  tar_target(trophic_niche_split, initial_split(trophic_niche_dat,
-                                                0.8,
-                                                strata = Trophic.Niche)),
+  tar_target(trophic_niche_dat_ai64_all, bird_beak_avonet %>%
+                           select(label,
+                                  Trophic.Niche,
+                                  starts_with("latent_")) %>%
+               mutate(codes = scale(across(starts_with("latent_"), ~ .x))) %>%
+               filter(!label %in% bad_birds) |>
+               select(Species = label, Trophic.Niche, codes) |>
+               mutate(codes = as.data.frame(codes)) |>
+               unnest(codes) |>
+               group_by(Trophic.Niche) |>
+               mutate(weights = 1 / n()) |>
+               ungroup() |>
+               mutate(weights = importance_weights(weights))),
   
-  tar_target(trophic_niche_dat_train, training(trophic_niche_split)),
+  tar_target(ai_codes, two_stage_vae$latent_df_means),
+  
+  tar_target(trophic_niche_dat_ai_all, ai_codes |>
+               left_join(bird_beak_avonet %>%
+                           select(label,
+                                  Trophic.Niche),
+                         by = c("Species" = "label")) %>%
+               mutate(codes = scale(across(starts_with("latent_"), ~ .x))) %>%
+               filter(!Species %in% bad_birds) |>
+               select(Species, Trophic.Niche, codes) |>
+               mutate(codes = as.data.frame(codes)) |>
+               unnest(codes) |>
+               group_by(Trophic.Niche) |>
+               mutate(weights = 1 / n()) |>
+               ungroup() |>
+               mutate(weights = importance_weights(weights))),
+  
+  tar_target(trophic_niche_dat_pca_scaling, ai_codes |>
+               select(Species) |>
+               left_join(bird_beak_pca %>%
+                           select(TipLabel,
+                                  starts_with("PC")),
+                         by = c("Species" = "TipLabel")) %>%
+               left_join(bird_beak_avonet %>%
+                           select(label,
+                                  Trophic.Niche),
+                         by = c("Species" = "label")) %>%
+               mutate(codes = scale(across(starts_with("PC"), ~ .x))) |>
+               pull(codes) |>
+               attributes()),
+  
+  tar_target(trophic_niche_dat_pca_all, ai_codes |>
+               select(Species) |>
+               left_join(bird_beak_pca %>%
+                           select(TipLabel,
+                                  starts_with("PC")),
+                         by = c("Species" = "TipLabel")) %>%
+               left_join(bird_beak_avonet %>%
+                           select(label,
+                                  Trophic.Niche),
+                         by = c("Species" = "label")) %>%
+               mutate(codes = scale(across(starts_with("PC"), ~ .x))) %>%
+               filter(!Species %in% bad_birds) |>
+               select(Species, Trophic.Niche, codes) |>
+               mutate(codes = as.data.frame(codes)) |>
+               unnest(codes) |>
+               group_by(Trophic.Niche) |>
+               mutate(weights = 1 / n()) |>
+               ungroup() |>
+               mutate(weights = importance_weights(weights))),
+  
+  tar_target(two_stage_cvae_pc, run_cvae_pc(trophic_niche_dat_pca_all),
+             format = "torch"),
+  
+  tar_target(trophic_niche_dat_pca_aug, augment_data_gen_pc(trophic_niche_dat_train_pc,
+                                                            two_stage_cvae_pc,
+                                                            trophic_levs2)),
+  
+  tar_target(trophic_niche_dat_ai64_aug, augment_data_gen_ai64(trophic_niche_dat_train_ai64,
+                                                            two_stage_cvae_ai64,
+                                                            trophic_levs2)),
+  
+  tar_target(trophic_niche_split_ai, initial_split(trophic_niche_dat_ai_all,
+                                                   0.8,
+                                                   strata = Trophic.Niche)),
+  
+  tar_target(trophic_niche_split_pc, {x <- trophic_niche_split_ai; x$data <- trophic_niche_dat_pca_all; x}),
+  
+  tar_target(trophic_niche_split_ai64, {x <- trophic_niche_split_ai; x$data <- trophic_niche_dat_ai64_all; x}),
+  
+  tar_target(trophic_niche_dat_train_ai, training(trophic_niche_split_ai)),
+  
+  tar_target(trophic_niche_dat_train_ai64, training(trophic_niche_split_ai64)),
+  
+  tar_target(trophic_niche_dat_train_pc, training(trophic_niche_split_pc)),
   
   tar_target(trophic_niche_cv, mc_cv(trophic_niche_dat,
                                     0.8,
                                     5,
                                     strata = Trophic.Niche)),
   
-  tar_target(trophic_niche_cv2, vfold_cv(trophic_niche_dat_train,
-                                    5,
-                                    strata = Trophic.Niche)),
+  tar_target(trophic_niche_cv_ai, vfold_cv(trophic_niche_dat_train_ai,
+                                           5,
+                                           strata = Trophic.Niche)),
+  
+  tar_target(trophic_niche_cv_ai64_aug, mc_cv(trophic_niche_dat_ai64_aug,
+                                           3/4, times = 20,
+                                           strata = strata,
+                                           pool = 0)),
+  
+  tar_target(trophic_niche_cv_pca_aug, mc_cv(trophic_niche_dat_pca_aug,
+                                           3/4, times = 20,
+                                           strata = strata,
+                                           pool = 0)),
+  
+  tar_target(trophic_niche_cv_ai64_aug_edited, edit_aug_cv(trophic_niche_cv_ai64_aug)),
+  
+  tar_target(trophic_niche_cv_pca_aug_edited, edit_aug_cv(trophic_niche_cv_pca_aug)),
+  
+  tar_target(trophic_niche_cv_pc, replace_data_cv(trophic_niche_cv_ai, trophic_niche_dat_train_pc)),
+  
+  tar_target(trophic_niche_cv_ai64, replace_data_cv(trophic_niche_cv_ai, trophic_niche_dat_train_ai64)),
+  
+  tar_target(trophic_niche_RF_ai, fit_RF_trophic3(trophic_niche_dat_train_ai,
+                                                  trophic_niche_cv_ai,
+                                                  ncodes = 15,
+                                                  code_names = "latent_")),
+  
+  tar_target(trophic_niche_RF_ai64, fit_RF_trophic3(trophic_niche_dat_train_ai64,
+                                                  trophic_niche_cv_ai64,
+                                                  ncodes = 64,
+                                                  code_names = "latent_code_")),
+  
+  tar_target(trophic_niche_RF_pc, fit_RF_trophic3(trophic_niche_dat_train_pc,
+                                                  trophic_niche_cv_pc,
+                                                  ncodes = 8,
+                                                  code_names = "PC")),
+  
+  tar_target(trophic_niche_RF_ai64_aug, fit_RF_trophic3_aug(trophic_niche_dat_ai64_aug,
+                                                  trophic_niche_cv_ai64_aug_edited,
+                                                  ncodes = 64,
+                                                  code_names = "latent_code_")),
+  
+  tar_target(trophic_niche_RF_pca_aug, fit_RF_trophic3_aug(trophic_niche_dat_pca_aug,
+                                                  trophic_niche_cv_pca_aug_edited,
+                                                  ncodes = 8,
+                                                  code_names = "PC")),
+  
+  tar_target(trophic_niche_GLM_ai, fit_GLM_trophic3(trophic_niche_dat_train_ai,
+                                                  trophic_niche_cv_ai,
+                                                  ncodes = 15,
+                                                  code_names = "latent_")),
+  
+  tar_target(trophic_niche_GLM_ai64, fit_GLM_trophic3(trophic_niche_dat_train_ai64,
+                                                  trophic_niche_cv_ai64,
+                                                  ncodes = 64,
+                                                  code_names = "latent_code_")),
+  
+  tar_target(trophic_niche_GLM_pc, fit_GLM_trophic3(trophic_niche_dat_train_pc,
+                                                  trophic_niche_cv_pc,
+                                                  ncodes = 8,
+                                                  code_names = "PC")),
+  
+  tar_target(trophic_niche_GLM_ai64_aug, fit_GLM_trophic3_aug(trophic_niche_dat_ai64_aug,
+                                                  trophic_niche_cv_ai64_aug_edited,
+                                                  ncodes = 64,
+                                                  code_names = "latent_code_")),
+  
+  tar_target(trophic_niche_GLM_pca_aug, fit_GLM_trophic3_aug(trophic_niche_dat_pca_aug,
+                                                  trophic_niche_cv_pca_aug_edited,
+                                                  ncodes = 8,
+                                                  code_names = "PC")),
   
   tar_target(trophic_niche_RF, fit_RF_trophic(bird_beak_avonet,
                                               trophic_niche_dat,
@@ -389,9 +588,25 @@ tar_plan(
                                                 trophic_niche_dat_train,
                                                 trophic_niche_cv2)),
   
-  tar_target(trophic_niche_RF_tuned, tune_RF_trophic(trophic_niche_RF, 
-                                                     trophic_niche_cv, 
-                                                     trophic_niche_dat)),
+  tar_target(trophic_niche_RF_tuned_ai, tune_RF_trophic(trophic_niche_RF_ai,
+                                                        trophic_niche_cv_ai, 
+                                                        trophic_niche_dat_train_ai)),
+  
+  tar_target(trophic_niche_RF_tuned_ai64, tune_RF_trophic(trophic_niche_RF_ai64_aug, 
+                                                          trophic_niche_cv_ai64_aug_edited,
+                                                          trophic_niche_dat_ai64_aug)),
+  
+  tar_target(trophic_niche_RF_tuned_pca, tune_RF_trophic(trophic_niche_RF_pca_aug, 
+                                                          trophic_niche_cv_pca_aug_edited,
+                                                          trophic_niche_dat_pca_aug)),
+  
+  tar_target(trophic_niche_GLM_tuned_ai64, tune_RF_trophic(trophic_niche_GLM_ai64_aug, 
+                                                          trophic_niche_cv_ai64_aug_edited,
+                                                          trophic_niche_dat_ai64_aug)),
+  
+  tar_target(trophic_niche_GLM_tuned_pca, tune_RF_trophic(trophic_niche_GLM_pca_aug, 
+                                                          trophic_niche_cv_pca_aug_edited,
+                                                          trophic_niche_dat_pca_aug)),
   
   tar_target(trophic_niche_RF_tuned2, tune_RF_trophic(trophic_niche_RF2, 
                                                       trophic_niche_cv2, 
@@ -401,8 +616,28 @@ tar_plan(
                finalize_workflow(trophic_niche_RF_tuned %>% select_best()) %>%
                fit(trophic_niche_dat)),
   
+  tar_target(trophic_niche_RF_final_ai64, trophic_niche_RF_ai64_aug$wf %>%
+               finalize_workflow(trophic_niche_RF_tuned_ai64 %>% select_best()) %>%
+               fit(trophic_niche_dat_ai64_aug)),
+  
+  tar_target(trophic_niche_RF_final_pca, trophic_niche_RF_pca_aug$wf %>%
+               finalize_workflow(trophic_niche_RF_tuned_pca %>% select_best()) %>%
+               fit(trophic_niche_dat_pca_aug)),
+  
+  tar_target(trophic_niche_GLM_final_ai64, trophic_niche_GLM_ai64_aug$wf %>%
+               finalize_workflow(trophic_niche_GLM_tuned_ai64 %>% select_best()) %>%
+               fit(trophic_niche_dat_ai64_aug)),
+  
+  tar_target(trophic_niche_GLM_final_pca, trophic_niche_GLM_pca_aug$wf %>%
+               finalize_workflow(trophic_niche_GLM_tuned_pca %>% select_best()) %>%
+               fit(trophic_niche_dat_pca_aug)),
+  
   tar_target(trophic_niche_RF_final_fit, trophic_niche_RF$wf %>%
                finalize_workflow(trophic_niche_RF_tuned %>% select_best()) %>%
+               last_fit(trophic_niche_split)),
+  
+  tar_target(trophic_niche_RF_final_fit_ai64, trophic_niche_RF_ai64_aug$wf %>%
+               finalize_workflow(trophic_niche_RF_tuned_ai64 %>% select_best()) %>%
                last_fit(trophic_niche_split)),
   
   tar_target(trophic_niche_RF_final2, trophic_niche_RF2$wf %>%
@@ -412,6 +647,88 @@ tar_plan(
   tar_target(trophic_niche_RF_final_fit2, trophic_niche_RF2$wf %>%
                finalize_workflow(trophic_niche_RF_tuned2 %>% select_best()) %>%
                last_fit(trophic_niche_split)),
+  
+  tar_target(trophic_niche_RF_preds_ai64, augment(trophic_niche_RF_final_ai64,
+                                               training(trophic_niche_split_ai64))),
+  
+  tar_target(trophic_niche_RF_preds_test_ai64, augment(trophic_niche_RF_final_ai64,
+                                                    testing(trophic_niche_split_ai64))),
+  
+  tar_target(trophic_niche_RF_preds_pca, augment(trophic_niche_RF_final_pca,
+                                                 training(trophic_niche_split_pc))),
+  
+  tar_target(trophic_niche_RF_preds_test_pca, augment(trophic_niche_RF_final_pca,
+                                                      testing(trophic_niche_split_pc))),
+  
+  tar_target(trophic_niche_GLM_preds_ai64, augment(trophic_niche_GLM_final_ai64,
+                                               training(trophic_niche_split_ai64))),
+  
+  tar_target(trophic_niche_GLM_preds_test_ai64, augment(trophic_niche_GLM_final_ai64,
+                                                    testing(trophic_niche_split_ai64))),
+  
+  tar_target(trophic_niche_GLM_preds_pca, augment(trophic_niche_GLM_final_pca,
+                                                 training(trophic_niche_split_pc))),
+  
+  tar_target(trophic_niche_GLM_preds_test_pca, augment(trophic_niche_GLM_final_pca,
+                                                      testing(trophic_niche_split_pc))),
+  
+  tar_target(metrics_by_trophic_niche, get_niche_metrics(metrics,
+                                                         trophic_niche_RF_preds_ai64,
+                                                         trophic_niche_RF_preds_pca,
+                                                         trophic_niche_RF_preds_test_ai64,
+                                                         trophic_niche_RF_preds_test_pca,
+                                                         trophic_niche_GLM_preds_ai64,
+                                                         trophic_niche_GLM_preds_pca,
+                                                         trophic_niche_GLM_preds_test_ai64,
+                                                         trophic_niche_GLM_preds_test_pca)),
+  
+  tar_target(trophic_niche_metrics_RF_ai64, metrics(trophic_niche_RF_preds_ai64 |>
+                                                     mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                                   starts_with(".pred"), -.pred_class,
+                                                   truth = Trophic.Niche,
+                                                   estimate = .pred_class)),
+  
+  tar_target(trophic_niche_metrics_RF_test_ai64, metrics(trophic_niche_RF_preds_test_ai64 |>
+                                                     mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                                   starts_with(".pred"), -.pred_class,
+                                                   truth = Trophic.Niche,
+                                                   estimate = .pred_class)),
+  
+  tar_target(trophic_niche_metrics_RF_pca, metrics(trophic_niche_RF_preds_pca |>
+                                                     mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                                   starts_with(".pred"), -.pred_class,
+                                                   truth = Trophic.Niche,
+                                                   estimate = .pred_class)),
+  
+  tar_target(trophic_niche_metrics_RF_test_pca, metrics(trophic_niche_RF_preds_test_pca |>
+                                                     mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                                   starts_with(".pred"), -.pred_class,
+                                                   truth = Trophic.Niche,
+                                                   estimate = .pred_class)),
+  
+  tar_target(trophic_niche_metrics_GLM_ai64, metrics(trophic_niche_GLM_preds_ai64 |>
+                                                     mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                                   starts_with(".pred"), -.pred_class,
+                                                   truth = Trophic.Niche,
+                                                   estimate = .pred_class)),
+  
+  tar_target(trophic_niche_metrics_GLM_test_ai64, metrics(trophic_niche_GLM_preds_test_ai64 |>
+                                                     mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                                   starts_with(".pred"), -.pred_class,
+                                                   truth = Trophic.Niche,
+                                                   estimate = .pred_class)),
+  
+  tar_target(trophic_niche_metrics_GLM_pca, metrics(trophic_niche_GLM_preds_pca |>
+                                                     mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                                   starts_with(".pred"), -.pred_class,
+                                                   truth = Trophic.Niche,
+                                                   estimate = .pred_class)),
+  
+  tar_target(trophic_niche_metrics_GLM_test_pca, metrics(trophic_niche_GLM_preds_test_pca |>
+                                                     mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                                   starts_with(".pred"), -.pred_class,
+                                                   truth = Trophic.Niche,
+                                                   estimate = .pred_class)),
   
   tar_target(trophic_niche_preds, augment(trophic_niche_RF_final,
                                           trophic_niche_dat)),
@@ -425,9 +742,49 @@ tar_plan(
   tar_target(trophic_niche_preds_train2, augment(trophic_niche_RF_final_fit2$.workflow[[1]],
                                                  training(trophic_niche_split))),
   
-  tar_target(metrics, metric_set(accuracy, bal_accuracy, roc_auc)),
+  tar_target(metrics, metric_set(accuracy, bal_accuracy, roc_auc, pr_auc, sens, spec, j_index)),
   
   tar_target(trophic_niche_conf_mat2, conf_mat(trophic_niche_preds2 %>%
+                                                mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                               Trophic.Niche,
+                                               .pred_class)),
+  
+  tar_target(trophic_niche_conf_mat_RF_test_ai64, conf_mat(trophic_niche_RF_preds_test_ai64 %>%
+                                                mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                              Trophic.Niche,
+                                              .pred_class)),
+  
+  tar_target(trophic_niche_conf_mat_RF_ai64, conf_mat(trophic_niche_RF_preds_ai64 %>%
+                                                mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                              Trophic.Niche,
+                                              .pred_class)),
+  
+  tar_target(trophic_niche_conf_mat_RF_test_pca, conf_mat(trophic_niche_RF_preds_test_pca %>%
+                                                mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                              Trophic.Niche,
+                                              .pred_class)),
+  
+  tar_target(trophic_niche_conf_mat_RF_pca, conf_mat(trophic_niche_RF_preds_pca %>%
+                                                mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                              Trophic.Niche,
+                                              .pred_class)),
+  
+  tar_target(trophic_niche_conf_mat_GLM_test_ai64, conf_mat(trophic_niche_GLM_preds_test_ai64 %>%
+                                                mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                              Trophic.Niche,
+                                              .pred_class)),
+  
+  tar_target(trophic_niche_conf_mat_GLM_ai64, conf_mat(trophic_niche_GLM_preds_ai64 %>%
+                                                mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                              Trophic.Niche,
+                                              .pred_class)),
+  
+  tar_target(trophic_niche_conf_mat_GLM_test_pca, conf_mat(trophic_niche_GLM_preds_test_pca %>%
+                                                mutate(Trophic.Niche = as.factor(Trophic.Niche)),
+                                              Trophic.Niche,
+                                              .pred_class)),
+  
+  tar_target(trophic_niche_conf_mat_GLM_pca, conf_mat(trophic_niche_GLM_preds_pca %>%
                                                 mutate(Trophic.Niche = as.factor(Trophic.Niche)),
                                               Trophic.Niche,
                                               .pred_class)),
@@ -457,6 +814,54 @@ tar_plan(
   tar_target(trophic_niche_conf_mat_train_plot, make_conf_mat_plot(trophic_niche_conf_mat2)),
   
   tar_target(trophic_niche_conf_mat_test_plot, make_conf_mat_plot(trophic_niche_conf_mat_test2)),
+  
+  tar_target(trophic_niche_conf_mat_train_RF_ai64_plot, 
+             make_conf_mat_plot(trophic_niche_conf_mat_RF_ai64)),
+  
+  tar_target(trophic_niche_conf_mat_train_RF_test_ai64_plot, 
+             make_conf_mat_plot(trophic_niche_conf_mat_RF_test_ai64)),
+  
+  tar_target(trophic_niche_conf_mat_train_RF_pca_plot, 
+             make_conf_mat_plot(trophic_niche_conf_mat_RF_pca)),
+  
+  tar_target(trophic_niche_conf_mat_train_RF_test_pca_plot, 
+             make_conf_mat_plot(trophic_niche_conf_mat_RF_test_pca)),
+  
+  tar_target(trophic_niche_conf_mat_train_GLM_ai64_plot, 
+             make_conf_mat_plot(trophic_niche_conf_mat_GLM_ai64)),
+  
+  tar_target(trophic_niche_conf_mat_train_GLM_test_ai64_plot, 
+             make_conf_mat_plot(trophic_niche_conf_mat_GLM_test_ai64)),
+  
+  tar_target(trophic_niche_conf_mat_train_GLM_pca_plot, 
+             make_conf_mat_plot(trophic_niche_conf_mat_GLM_pca)),
+  
+  tar_target(trophic_niche_conf_mat_train_GLM_test_pca_plot, 
+             make_conf_mat_plot(trophic_niche_conf_mat_GLM_test_pca)),
+  
+  tar_target(trophic_niche_conf_mat_train_RF_ai64_plot2, 
+             make_conf_mat_plot2(trophic_niche_conf_mat_RF_ai64)),
+  
+  tar_target(trophic_niche_conf_mat_train_RF_test_ai64_plot2, 
+             make_conf_mat_plot2(trophic_niche_conf_mat_RF_test_ai64)),
+  
+  tar_target(trophic_niche_conf_mat_train_RF_pca_plot2, 
+             make_conf_mat_plot2(trophic_niche_conf_mat_RF_pca)),
+  
+  tar_target(trophic_niche_conf_mat_train_RF_test_pca_plot2, 
+             make_conf_mat_plot2(trophic_niche_conf_mat_RF_test_pca)),
+  
+  tar_target(trophic_niche_conf_mat_train_GLM_ai64_plot2, 
+             make_conf_mat_plot2(trophic_niche_conf_mat_GLM_ai64)),
+  
+  tar_target(trophic_niche_conf_mat_train_GLM_test_ai64_plot2, 
+             make_conf_mat_plot2(trophic_niche_conf_mat_GLM_test_ai64)),
+  
+  tar_target(trophic_niche_conf_mat_train_GLM_pca_plot2, 
+             make_conf_mat_plot2(trophic_niche_conf_mat_GLM_pca)),
+  
+  tar_target(trophic_niche_conf_mat_train_GLM_test_pca_plot2, 
+             make_conf_mat_plot2(trophic_niche_conf_mat_GLM_test_pca)),
   
   tar_target(trophic_niche_conf_mat_train_plot_pdf, ggsave("figures/trophic_niche_confusion_train.pdf",
                                                            trophic_niche_conf_mat_train_plot,

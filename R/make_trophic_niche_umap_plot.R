@@ -15,3 +15,14 @@ make_trophic_niche_umap_plot <- function(pl_dat,
     
 
 }
+
+make_trophic_niche_umap_plot2 <- function(pl_dat,
+                                         niche_pal) {
+
+  ggplot(pl_dat, aes(`UMAP Axis 1`, `UMAP Axis 2`)) +
+    geom_point(aes(colour = Order)) +
+    coord_equal() +
+    theme_minimal()
+    
+
+}
