@@ -45,6 +45,10 @@ tar_plan(
                mutate(beak_narrowness = Beak.Length_Culmen / (Beak.Width + Beak.Depth / 2),
                       beak_flatness = Beak.Width / Beak.Depth)),
   
+  tar_target(diet_data, read_tsv("data/diet/AvianDietDatabase.txt")),
+  
+  tar_target(hires_diet_df, make_diet_data(bird_beak_avonet, diet_data)),
+  
   # tar_target(bird_beak_clads, pf_as_pf(clads_tree) %>%
   #              left_join(bird_beak_codes %>%
   #              filter(is_tip) %>%
@@ -427,6 +431,8 @@ tar_plan(
                ungroup() |>
                mutate(weights = importance_weights(weights))),
   
+  tar_target(trophic_niche_dat_ai64_phylo, make_trophic_niche_dat_ai64_phylo(bird_beak_avonet, bad_birds)),
+  
   tar_target(ai_codes, two_stage_vae$latent_df_means),
   
   tar_target(trophic_niche_dat_ai_all, ai_codes |>
@@ -497,9 +503,13 @@ tar_plan(
   
   tar_target(trophic_niche_split_ai64, {x <- trophic_niche_split_ai; x$data <- trophic_niche_dat_ai64_all; x}),
   
+  tar_target(trophic_niche_split_ai64_phylo, {x <- trophic_niche_split_ai; x$data <- trophic_niche_dat_ai64_phylo; x}),
+  
   tar_target(trophic_niche_dat_train_ai, training(trophic_niche_split_ai)),
   
   tar_target(trophic_niche_dat_train_ai64, training(trophic_niche_split_ai64)),
+  
+  tar_target(trophic_niche_dat_train_ai64_phylo, training(trophic_niche_split_ai64_phylo)),
   
   tar_target(trophic_niche_dat_train_pc, training(trophic_niche_split_pc)),
   
@@ -530,6 +540,8 @@ tar_plan(
   
   tar_target(trophic_niche_cv_ai64, replace_data_cv(trophic_niche_cv_ai, trophic_niche_dat_train_ai64)),
   
+  tar_target(trophic_niche_cv_ai64_phylo, replace_data_cv(trophic_niche_cv_ai, trophic_niche_dat_train_ai64_phylo)),
+  
   tar_target(trophic_niche_RF_ai, fit_RF_trophic3(trophic_niche_dat_train_ai,
                                                   trophic_niche_cv_ai,
                                                   ncodes = 15,
@@ -539,6 +551,11 @@ tar_plan(
                                                   trophic_niche_cv_ai64,
                                                   ncodes = 64,
                                                   code_names = "latent_code_")),
+  
+  tar_target(trophic_niche_RF_ai64_phylo, fit_RF_trophic3(trophic_niche_dat_train_ai64_phylo,
+                                                  trophic_niche_cv_ai64_phylo,
+                                                  ncodes = 2020 + 64,
+                                                  code_names = c("latent_code_", "V_"))),
   
   tar_target(trophic_niche_RF_pc, fit_RF_trophic3(trophic_niche_dat_train_pc,
                                                   trophic_niche_cv_pc,
