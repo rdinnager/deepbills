@@ -66,6 +66,10 @@ tar_plan(
                select(starts_with("latent_")) %>%
                as.matrix()),
   
+  tar_target(landmark_folder, "data/landmarks_oriented/all_landmarks"),
+  
+  tar_target(landmark_pf, get_landmark_pf(landmark_folder)),
+  
   tar_target(two_stage_cvae, run_cvae(bird_beak_avonet),
              format = "torch"),
   
