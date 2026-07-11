@@ -38,5 +38,21 @@ vignettes/*.pdf
 # R Environment Variables
 .Renviron
 
+# --- Large data / outputs / caches — kept local, never in git ---
 data/
+output/
+_targets/
+**/__pycache__/
+*.zip
 
+# --- Hub transcript archive: keep the small sync script, ignore the JSONL data ---
+_meta/transcripts/
+
+# --- Figures + manuscript materials kept local-only (decision 2026-07-10) ---
+figures/
+doc/*.pdf
+doc/*.docx
+doc/*.tex
+doc/*.xlsx
+doc/Figures/
+doc/Revisions/

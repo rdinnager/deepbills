@@ -6,8 +6,15 @@
 #' @param trophic_niche_RF
 tune_RF_trophic <- function(trophic_niche_RF_ai64_aug, 
                             trophic_niche_cv_ai64_aug_edited,
-                            trophic_niche_dat_ai64_aug) {
+                            trophic_niche_dat_ai64_aug,
+                            mode = "classification") {
 
+  if(mode == "classification") {
+    metrics <- metric_set(roc_auc, accuracy, f_meas)
+  } else {
+    metrics <- metric_set(rmse, mae, rsq)
+  }
+  
   registerDoParallel(6)
   
   tuned <- trophic_niche_RF_ai64_aug$wf %>%
@@ -15,9 +22,10 @@ tune_RF_trophic <- function(trophic_niche_RF_ai64_aug,
                           initial = trophic_niche_RF_ai64_aug$tune,
                           param_info = extract_parameter_set_dials(trophic_niche_RF_ai64_aug$wf) %>%
                             finalize(trophic_niche_dat_ai64_aug),
-                          metrics = metric_set(accuracy, roc_auc),
+                          metrics = metrics,
                           control = control_bayes(verbose = TRUE,
-                                                  verbose_iter = TRUE))
+                                                  verbose_iter = TRUE),
+                          iter = 100)
   
   stopImplicitCluster()
 

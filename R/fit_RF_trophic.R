@@ -83,26 +83,46 @@ fit_RF_trophic2 <- function(bird_beak_avonet, dat, cv) {
 fit_RF_trophic3 <- function(trophic_niche_dat_train_ai,
                             trophic_niche_cv_ai,
                             ncodes = 15,
-                            code_names = "latent_") {
+                            code_names = "latent_",
+                            noutcomes = 39,
+                            diet_names = "diet_",
+                            mode = "classification") {
 
 
-  trophic_recipe <- recipe(trophic_niche_dat_train_ai,
-                           vars = colnames(trophic_niche_dat_train_ai %>%
-                                             select(Trophic.Niche,
-                                                    starts_with(code_names),
-                                                    weights)),
-                           roles = c("outcome", rep("predictor", ncodes), "case_weights")) 
+  if(mode == "classification") {
+    trophic_recipe <- recipe(trophic_niche_dat_train_ai,
+                             vars = colnames(trophic_niche_dat_train_ai %>%
+                                               select(Trophic.Niche,
+                                                      starts_with(code_names),
+                                                      weights)),
+                             roles = c("outcome", rep("predictor", ncodes), "case_weights")) 
+    
+    
+  } else {
+    trophic_recipe <- recipe(trophic_niche_dat_train_ai,
+                             vars = colnames(trophic_niche_dat_train_ai %>%
+                                               select(Value,
+                                                      Diet,
+                                                      starts_with(code_names))),
+                             roles = c("outcome", rep("predictor", ncodes), "predictor")) 
+    
+    
+  }
 
   trophic_mod <- rand_forest(mtry = tune(),
                             trees = tune(),
                             min_n = tune()) %>%
-    set_mode("classification") %>%
-    set_engine("ranger")
+      set_mode(mode) %>%
+      set_engine("ranger", importance = "impurity")
 
   trophic_wf <- workflow() %>%
     add_model(trophic_mod) %>%
-    add_recipe(trophic_recipe) %>%
-    add_case_weights(weights)
+    add_recipe(trophic_recipe)
+  
+  if(mode == "classification") {
+    trophic_wf <- trophic_wf %>%
+      add_case_weights(weights)
+  }
   
   registerDoParallel(6)
   
