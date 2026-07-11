@@ -43,6 +43,8 @@ data/
 output/
 _targets/
 **/__pycache__/
+__pycache__/
+*.pyc
 *.zip
 
 # --- Hub transcript archive: keep the small sync script, ignore the JSONL data ---
@@ -56,3 +58,7 @@ doc/*.tex
 doc/*.xlsx
 doc/Figures/
 doc/Revisions/
+
+# --- Claude Code local files / scratch ---
+.claude/
+test_widget.html
