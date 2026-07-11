@@ -40,3 +40,17 @@ vignettes/*.pdf
 
 data/
 
+# Large pipeline artifacts / outputs
+output/
+_targets/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Claude Code local files
+.claude/
+
+# Scratch/test files
+test_widget.html
+
