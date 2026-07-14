@@ -62,3 +62,8 @@ doc/Revisions/
 # --- Claude Code local files / scratch ---
 .claude/
 test_widget.html
+
+# In-progress manuscript — kept LOCAL (like data/ and output/).
+# The remote is a PUBLIC repo and the paper is unpublished: drafts, the results
+# ledger, adversarial audits and sweep results stay on Drive until submission.
+manuscript/

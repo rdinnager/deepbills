@@ -166,7 +166,7 @@ The work tree is on Google Drive but the **`.git` lives off Drive** at
 `git-drive` wrapper, never plain `git` from the work tree:
 
 ```bash
-cd "/g/Shared drives/COBL Data/Projects/_scratch/git-drive"
+cd "/g/Shared drives/COBL Data/Projects/_tools/git-drive"
 ./git-drive deepbills <git args…>     # status, log, add, commit, push …
 ./git-drive sync deepbills            # fetch (the local mirror is machine-local)
 ```
@@ -180,31 +180,60 @@ public repo); the bulk data + trained models live on Drive, backed up from the
 ## Progress
 
 <!-- PROGRESS:BEGIN — maintained by the weekly /project-status scan; hand-edits welcome and respected -->
-**Stage:** active (reviving toward publication)
-**Last reviewed:** 2026-07-10
-**Current status:** Assembled into the hub 2026-07-10: cloned from GitHub, backfilled
-with the full 97 GB authoritative copy from `E:\Projects\deepbills`, and reconciled —
-`main` now contains E:'s recovered 2024-25 work **and** the merged `evoV3` branch (the
-v3 Bayesian path-energy model, extractor, animation scripts, and the 772-line theory
-notes). All data + the trained v3 model + HPC outputs (`data/v3_bayesian/`, edge-scan,
-animations) are present locally. The published Dinnage & Kleineberg 2025 (PLoS Comp
-Biol) paper is the methods foundation; this repo is its evolutionary extension.
+**Stage:** active (assembling toward first draft)
+**Last reviewed:** 2026-07-13
+**Current status:** Since the 2026-07-10 hub-assembly, a full 2026-07-11 blitz (all uncommitted
+on Drive, no git commits since) has: (a) validated the v3 Bayesian pipeline end-to-end on the
+**Vulcan** PAICE cluster (`R/train_v3_param.R` + `manuscript/research/vulcan-setup-log.md`;
+100-ep validation 12.6 min, projected full 2500-ep run ~5 h on an L40S, ~13 GB peak GPU),
+(b) produced the previously-flagged v3 ancestral-estimate extract files as a side-effect of
+that run, (c) assembled a full manuscript scaffold under `manuscript/` — five draft sections,
+locked framing (`DECISION.md`, superseded by `PAPER-PLAN.md`), verified results ledger, ~30
+research/critique/audit files, and complete analysis scripts + `.rds` outputs across six
+subareas (`baselines/`, `stasis/`, `omnivory-sink/`, `schluter/`, `ideas2/`, `diversification/`),
+and (d) locked a **framing pivot**: from a high-impact "hidden biology" venue to a methods /
+rigour venue (**MEE** or **Syst Biol**). Adversarial audits killed four previously "strong"
+numbers (r=0.70, 0.42-vs-0.11, gravity-law p=1.4e-18, naive diversification R²=0.23) as
+non-independence / imbalance / overdispersion artifacts. New thesis: the model buys *decodable
+generative ancestors + integrated multi-trait modelling* (R1) but **no geometric advantage over
+plain morphospace at any scale** (R5, the through-line); omnivory sink survives (descriptive,
+Burin-anchored, R3); stasis reframed to an honest deep-time positive + a ratio-artifact
+negative (R4).
 
 **Known / resolved — do NOT re-flag:**
 - Missing data — RESOLVED 2026-07-10 (backfilled from the E: external HDD; kept local,
   git-ignored). Original heavy data lived on a Linux box (`/data/dinnage/Projects/`).
 - The squared-distance evo model exists: it's the v3 Bayesian model on the merged
   `evoV3` work (path **energy** vs the old arc **length**).
+- **v3 ancestral extract** — RESOLVED 2026-07-11: `bill_vae_aces_16dim_v3_bayesian.rds` +
+  `..._linear.rds` produced by the Vulcan validation run at
+  `data/v3_validate_100ep/`. Full-length (2500-ep) numbers still to come, but the extract
+  step is no longer a blocker.
+- **Pipeline runs end-to-end on GPU** — RESOLVED 2026-07-11 on Vulcan (torch 0.17.0 + CUDA
+  12.6, patched phyf recipe captured). Local torch/CUDA verification is now a nice-to-have
+  rather than a gate.
+- **Framing/hypothesis** — RESOLVED 2026-07-11: paper is locked as the honest methods +
+  reckoning paper; Shinichi's "need a biological hypothesis" is honored via R3 (omnivory
+  sink) as a descriptive backbone. Shinichi confirmation is nice-to-have, not blocking.
 
 **Open items:**
-- **Generate the v3 ancestral estimates** — `bill_vae_aces_16dim_v3_bayesian.rds` and
-  `..._linear.rds` were never created (the extract step wasn't run). Run
-  `.VAE_evo_model_v3_extract.R` (all inputs are present locally; needs torch/GPU).
-- **Write-up + biological question** — assemble a project description and get
-  Shinichi's/Azumi's input on the anchoring hypothesis (see the meeting note).
-- **Verify the pipeline runs** end-to-end (torch/CUDA; the `_targets` cache should let
-  `tar_make()` skip most rebuilds; watch for hardcoded `/data/dinnage/...` Linux paths).
-- Line-ending (CRLF) churn on many tracked files from the E: copy is left as-is;
-  discard/normalize when convenient (content is identical, safe on the E: copy).
+- **Run the full-length Vulcan production job** (2500 epochs; ~5 h on an L40S) so the numbers
+  in Results are from the full-fit model, not the 100-ep validation. Optionally a small
+  hyperparameter sweep on the five precision weights (`TIP_W`, `MANIFOLD_W`, `CODE_W`,
+  `TROPHIC_W`, `ROOT_W`) — sized in `vulcan-setup-log.md`.
+- **First-draft assembly pass** — `drafts/methods.md` has `[PENDING]` baseline blocks; the
+  Results section needs to be rewritten against the six `results/*/` subareas and
+  `RESULTS-LEDGER.md`; Introduction needs to be retargeted from "hidden biology" to the
+  "does learning the manifold help?" thesis (flagged in PAPER-PLAN.md).
+- **Citation verification batch** — the diversification-methods and framework refs listed in
+  `PAPER-PLAN.md` §Citation discipline must be verified into `research/CITATIONS-verified.md`
+  before entering the drafts.
+- **Snapshot the 2026-07-11 work.** Nothing has been committed since 2026-07-10; `git status`
+  shows ~40 modified R files (much of it CRLF churn from the E: backfill) plus the entire
+  new `manuscript/` scaffold + `R/train_v3_param.R`. Sort CRLF noise from substantive
+  additions before committing; also confirm whether `manuscript/` should be gitignored
+  (kept local like `data/`) or committed to the public repo.
+- Line-ending (CRLF) churn on many tracked files from the E: copy is still there; discard/
+  normalize when convenient (content is identical, safe on the E: copy).
 <!-- PROGRESS:END -->
 
