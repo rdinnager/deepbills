@@ -35,6 +35,13 @@ root_weight     <- env_num("ROOT_W",       1/100)
 rho_start_mult  <- env_num("RHO_START_MULT",   3)
 rho_target_div  <- env_num("RHO_TARGET_DIV",   3)
 lambda_val      <- env_num("LAMBDA",        1e-2)
+## Held-out-tip cross-validation (tip-cv-design.md). MASK_FRAC>0 holds out that
+## fraction of tips from the tip loss — and, because tip_dat is read ONLY by the
+## tip loss, from ALL parameter estimation (rates included). The held-out tips'
+## parent ancestral states + terminal branch lengths + observed latents are saved
+## to out_dir/cv_holdout.rds for the forward-simulation scorer.
+mask_frac       <- env_num("MASK_FRAC",        0)
+mask_seed       <- as.integer(env_num("MASK_SEED", 1))
 n_epoch         <- as.integer(env_num("N_EPOCHS", 2500))   # hard cap
 out_tag         <- Sys.getenv("OUT_TAG", unset = "v3_bayesian")
 
@@ -154,6 +161,29 @@ bill_tips <- bill_pf %>%
   as.matrix()
 
 lat_vars <- apply(bill_tips, 2, sd)
+
+## ---- CV tip mask (rows of bill_tips == bill_pf tips order == tip_dat rows) ----
+tip_labels <- bill_pf %>% filter(is_tip) %>% pull(label)
+n_tips_all <- nrow(bill_tips)
+tip_keep   <- rep(1, n_tips_all)          # 1 = used in tip loss, 0 = held out
+if (mask_frac > 0) {
+  set.seed(mask_seed)
+  n_held <- round(mask_frac * n_tips_all)
+  held   <- sample.int(n_tips_all, n_held)
+  tip_keep[held] <- 0
+  ## terminal branch length of a tip == the blen of the edge whose label is the tip label
+  term_blen <- blens[tip_labels[held]]
+  cv_holdout <- list(
+    mask_frac    = mask_frac, mask_seed = mask_seed,
+    held_labels  = tip_labels[held],
+    term_blen    = as.numeric(term_blen),
+    obs_latent   = bill_tips[held, , drop = FALSE],   # observed (encoder-mean) latent, n_held x 16
+    tip_labels   = tip_labels, tip_keep = tip_keep
+  )
+  saveRDS(cv_holdout, file.path(out_dir, "cv_holdout.rds"))
+  cat(sprintf("[CV] held out %d / %d tips (frac=%.2f seed=%d) -> %s/cv_holdout.rds\n",
+              n_held, n_tips_all, mask_frac, mask_seed, out_dir))
+}
 
 bill_tree_mat <- pf_as_sparse(bill_pf$phlo)
 bill_tree_mat <- bill_tree_mat[ , bill_pf$label]
@@ -417,9 +447,12 @@ energy_loss <- function(energies) {
   torch_mean(energies)
 }
 
-tip_loss <- function(tip_data, tip_recon) {
-  tip_dists <- torch_square(tip_data - tip_recon)
-  torch_mean(tip_dists)
+tip_loss <- function(tip_data, tip_recon, keep_w = NULL) {
+  tip_dists <- torch_square(tip_data - tip_recon)          # n_tip x n_dim
+  if (is.null(keep_w)) return(torch_mean(tip_dists))
+  ## CV: held-out tips (keep_w==0) contribute nothing; normalise by kept count.
+  tip_dists <- tip_dists * keep_w$unsqueeze(2)
+  torch_sum(tip_dists) / (keep_w$sum() * tip_dists$size(2))
 }
 
 root_loss <- function(root_values) {
@@ -434,9 +467,14 @@ mani_evo_mod <- nn_module("mani_evo_bayesian",
                           initialize = function(n_rates, n_dim, centroids, vars,
                                                 n_segs = 100, init_rates = NULL,
                                                 bill_decoder, active_dims, latvars,
-                                                device = "cuda") {
+                                                device = "cuda", tip_keep = NULL) {
 
                             self$device <- device
+                            ## CV held-out-tip weight (NULL = all tips used). A field, not a
+                            ## script global, so forward() sees it (nn_module methods don't
+                            ## read script globals — see the FAST_BATCH note).
+                            self$tip_keep_w <- if (!is.null(tip_keep))
+                              torch_tensor(as.numeric(tip_keep), device = device) else NULL
                             self$n_rates <- n_rates
                             self$n_dim <- n_dim
                             self$n_segs <- n_segs
@@ -524,7 +562,7 @@ mani_evo_mod <- nn_module("mani_evo_bayesian",
                             code_energy_loss <- energy_loss(code_energies)
                             trophic_energy_loss <- energy_loss(trophic_energies)
 
-                            tip_loss_val <- tip_loss(x[[4]], z_tips)
+                            tip_loss_val <- tip_loss(x[[4]], z_tips, self$tip_keep_w)
                             rootval_loss <- root_loss(self$root_values)
 
                             list(manifold_energy_loss, code_energy_loss, trophic_energy_loss,
@@ -538,7 +576,8 @@ mod <- mani_evo_mod(n_rates = nrow(bill_init_rates), n_dim = 16,
                     n_segs = n_segs, init_rate = bill_init_rates,
                     bill_decoder = bill_decoder, active_dims = active_dims,
                     latvars = lat_vars,
-                    device = "cuda")
+                    device = "cuda",
+                    tip_keep = if (mask_frac > 0) tip_keep else NULL)
 mod <- mod$cuda()
 
 write_rds(as.numeric(mod$target_rho$cpu()), file.path(out_dir, "estimated_rho_16dim_rho_schedule_v3.rds"))
@@ -597,10 +636,19 @@ scheduler <- lr_one_cycle(optim1, max_lr = lr,
 
 optim1$zero_grad()
 
-## Initialize loss history CSV
+## POST_ONLY: recover a run whose training finished but whose post-training block
+## crashed, without paying for the fit again (see the epoch loop below). Defined
+## HERE, before the loss_history header write, so recovery does not truncate the
+## very history it reads.
+post_only <- tolower(Sys.getenv("POST_ONLY", "off")) %in% c("on", "1", "true", "yes")
+
+## Initialize loss history CSV (a fresh training run truncates + writes the header;
+## a POST_ONLY recovery must NOT touch the existing history)
 loss_csv <- file.path(out_dir, "loss_history.csv")
-cat("epoch,total_loss,tip_loss,manifold_energy,code_energy,trophic_energy,root_loss,rho,lr,epoch_secs\n",
-    file = loss_csv)
+if (!post_only) {
+  cat("epoch,total_loss,tip_loss,manifold_energy,code_energy,trophic_energy,root_loss,rho,lr,epoch_secs\n",
+      file = loss_csv)
+}
 
 checkpoint_every <- 100
 
@@ -613,7 +661,36 @@ best_epoch <- 0L
 stopped_early <- FALSE
 best_path  <- file.path(out_dir, "checkpoint_best.to")
 
-for(epoch in 1:n_epoch) {
+## --- POST_ONLY: recover a run whose training finished but whose post-training
+## block crashed, without paying for the fit again (see also the guard on the
+## loss_history header write above). The epoch loop is skipped and the convergence
+## state is rebuilt from loss_history.csv where present; extraction then proceeds
+## from checkpoint_best.to as usual. If loss_history is missing/empty, fall back to
+## POST_BEST_EPOCH / POST_FINAL_EPOCH / POST_BEST_LOSS / POST_FINAL_LOSS env vars.
+if (post_only) {
+  lh_path <- file.path(out_dir, "loss_history.csv")
+  lh <- tryCatch(read.csv(lh_path), error = function(e) NULL)
+  if (!is.null(lh) && nrow(lh) > 0) {
+    bi <- which.min(lh$total_loss)
+    epoch      <- as.integer(max(lh$epoch))
+    total_loss <- lh$total_loss[which.max(lh$epoch)]
+    best_loss  <- lh$total_loss[bi]
+    best_epoch <- as.integer(lh$epoch[bi])
+    train_start <- Sys.time() - as.difftime(sum(lh$epoch_secs), units = "secs")
+  } else {
+    epoch      <- as.integer(env_num("POST_FINAL_EPOCH", NA))
+    best_epoch <- as.integer(env_num("POST_BEST_EPOCH", NA))
+    total_loss <- env_num("POST_FINAL_LOSS", NA)
+    best_loss  <- env_num("POST_BEST_LOSS", NA)
+    if (is.na(best_epoch) || is.na(epoch))
+      stop("POST_ONLY: no usable loss_history.csv and POST_*_EPOCH not set")
+    cat("[POST_ONLY] loss_history absent/empty; using POST_* env fallbacks\n")
+  }
+  cat(sprintf("[POST_ONLY] skipping training; final epoch %d, best loss %.6f @ epoch %d\n",
+              epoch, best_loss, best_epoch))
+}
+
+if (!post_only) for(epoch in 1:n_epoch) {
 
   epoch_start <- Sys.time()
   optim1$zero_grad()
@@ -783,6 +860,33 @@ cat(sprintf("per-epoch mean:      %.3f s\n", per_epoch))
 cat(sprintf("extrapolated 2500ep: %.1f min (%.2f h)\n",
             per_epoch * 2500 / 60, per_epoch * 2500 / 3600))
 
+options(torch.serialization_version = 2)
+
+## --- Restore the BEST model before extracting anything -----------------------
+## Everything downstream (ancestral estimates, scoring) must come from the best
+## model on the STATIONARY objective, not from whatever the last epoch happened to
+## leave behind. Without this, a run that drifted (or diverged) past its optimum
+## exported ancestors from a worse model than it had already found.
+## NB: this must run BEFORE the convergence record below, which reports restored_best.
+## We load the best STATE DICT into the already-constructed in-memory `mod` rather
+## than replacing `mod` with torch_load(best_path). A whole-module torch_load in R
+## torch returns a module whose non-parameter tensor FIELDS (self$centroids,
+## self$segs, self$bill_decoder, ...) can be dangling external pointers, so the
+## subsequent extraction forward pass dies with "external pointer is not valid".
+## load_state_dict copies only parameters/buffers into the valid live module.
+restored_best <- FALSE
+if (file.exists(best_path) && best_epoch > 0L) {
+  best_sd <- torch_load(best_path)$state_dict()
+  mod$load_state_dict(best_sd)
+  mod$to(device = if (cuda_is_available()) "cuda" else "cpu")
+  restored_best <- TRUE
+  cat(sprintf("restored BEST model from epoch %d (loss %.6f) for extraction\n",
+              best_epoch, best_loss))
+} else {
+  cat("WARNING: no best checkpoint found — extracting from the final-epoch model\n")
+}
+torch_save(mod, file.path(out_dir, "mani_evo_mod_v3_bayesian.to"))
+
 ## Machine-readable convergence record for the sweep to aggregate
 conv <- data.frame(
   out_tag = out_tag, seed = seed_int, epochs_run = epochs_run, n_epochs_cap = n_epoch,
@@ -799,31 +903,13 @@ conv <- data.frame(
 write.csv(conv, file.path(out_dir, "convergence.csv"), row.names = FALSE)
 tryCatch({
   if (cuda_is_available()) {
+    st <- cuda_memory_stats()
     cat(sprintf("peak GPU mem allocated: %.2f GB\n",
-                as.numeric(cuda_max_memory_allocated()) / 1e9))
+                as.numeric(st$allocated_bytes$all$peak) / 1e9))
     cat(sprintf("peak GPU mem reserved:  %.2f GB\n",
-                as.numeric(cuda_max_memory_reserved()) / 1e9))
+                as.numeric(st$reserved_bytes$all$peak) / 1e9))
   }
 }, error = function(e) cat("GPU mem query unavailable:", conditionMessage(e), "\n"))
-
-options(torch.serialization_version = 2)
-
-## --- Restore the BEST model before extracting anything -----------------------
-## Everything downstream (ancestral estimates, scoring) must come from the best
-## model on the STATIONARY objective, not from whatever the last epoch happened to
-## leave behind. Without this, a run that drifted (or diverged) past its optimum
-## exported ancestors from a worse model than it had already found.
-restored_best <- FALSE
-if (file.exists(best_path) && best_epoch > 0L) {
-  mod <- torch_load(best_path)
-  mod$to(device = if (cuda_is_available()) "cuda" else "cpu")
-  restored_best <- TRUE
-  cat(sprintf("restored BEST model from epoch %d (loss %.6f) for extraction\n",
-              best_epoch, best_loss))
-} else {
-  cat("WARNING: no best checkpoint found — extracting from the final-epoch model\n")
-}
-torch_save(mod, file.path(out_dir, "mani_evo_mod_v3_bayesian.to"))
 
 ###############################################################################
 ## Post-training: extract predictions
