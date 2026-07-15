@@ -103,10 +103,29 @@ for (i in seq_len(nrow(r3))) {
   bl[i] <- if (!is.na(blens[lab])) blens[lab] else NA_real_
 }
 ok <- is.finite(bl) & bl > 1e-8 & is.finite(rowSums(incr))
-sig2 <- colMeans(incr[ok, ]^2 / bl[ok])                 # 16
-cat(sprintf("sigma^2 (per-dim) mean=%.4g  range [%.3g, %.3g]; n_edges=%d\n",
-            mean(sig2), min(sig2), max(sig2), sum(ok)))
-sigt <- torch_tensor(sqrt(sig2), dtype = torch_float(), device = dev)  # sigma_j (16)
+## PER-MODEL, metric-consistent sigma^2 (scalar; matches cv_heatkernel.R). Sharing a
+## flat sigma^2 mis-calibrates the manifold model's metric-scaled predictive spread and
+## unfairly penalises it. Euclidean: flat increments. Manifold: training-edge geodesic
+## energies (fitted z_seqs as near-geodesic proxy). d=16, blen normalisation.
+s2_euc <- mean(rowSums(incr[ok, ]^2) / (16 * bl[ok]))
+train_idx <- which(!(r3$edge %in% held_set) & is.finite(bl) & bl > 1e-8)
+metric_path_energy <- function(idx_chunk) {
+  paths <- lapply(idx_chunk, function(i) as.matrix(r3$z_seqs[[i]][, lat_cols]))
+  npt <- nrow(paths[[1]]); k <- length(paths)
+  P <- torch_tensor(array(unlist(lapply(paths, t)), dim = c(16, npt, k)),
+                    dtype = torch_float(), device = dev)$permute(c(3,1,2))
+  vec  <- P[ , , 2:npt] - P[ , , 1:(npt-1)]
+  ymid <- (P[ , , 2:npt] + P[ , , 1:(npt-1)]) / 2
+  G <- metric_G(ymid$permute(c(1,3,2))$reshape(c(k*(npt-1), 16)))$reshape(c(k, npt-1, 16))$permute(c(1,3,2))
+  as.numeric(((vec * G * vec)$sum(dim = 2)$sum(dim = 2) * (npt-1))$cpu())
+}
+e_tr <- numeric(0)
+for (st in seq(1, length(train_idx), by = 500)) {
+  en <- min(st + 499, length(train_idx)); e_tr <- c(e_tr, metric_path_energy(train_idx[st:en]))
+}
+s2_G <- mean(e_tr / (16 * bl[train_idx]))
+cat(sprintf("sigma^2: euc=%.4g  manifold(G)=%.4g; n_edges=%d\n", s2_euc, s2_G, sum(ok)))
+sig_euc <- sqrt(s2_euc); sig_man <- sqrt(s2_G)          # scalars
 
 ###############################################################################
 ## Simulate N draws for all held tips, in ROW CHUNKS (bounds GPU memory: metric_G
@@ -115,7 +134,6 @@ sigt <- torch_tensor(sqrt(sig2), dtype = torch_float(), device = dev)  # sigma_j
 ###############################################################################
 CHUNK <- as.integer(Sys.getenv("CHUNK", if (DRIFT) "4000" else "8000"))
 FD_EPS <- as.numeric(Sys.getenv("FD_EPS", "1e-3"))
-sigv  <- sigt$view(c(1,-1))                         # 1 x 16
 eye16 <- torch_eye(16, device = dev)                # for batched finite-diff
 
 ## Riemannian-BM drift b^i = (1/G_ii)*(0.5*sum_k dlogG_k/dz_i - dlogG_i/dz_i).
@@ -140,22 +158,24 @@ drift_b <- function(Zc) {
   list(b = (0.5 * sumk - diag_ik) / Gd, G = Gd)
 }
 
-sim_chunk <- function(Zc, dtc, manifold) {          # Zc: b x 16, dtc: b x 1
+## sg = scalar per-model BM rate (sig_man for manifold, sig_euc for Euclidean).
+sim_chunk <- function(Zc, dtc, manifold, sg) {      # Zc: b x 16, dtc: b x 1
   sqrt_dt <- dtc$sqrt()
   for (s in seq_len(N_STEPS)) {
     xi <- torch_randn(Zc$size(), device = dev)
-    if (!manifold) { Zc <- Zc + sigv * sqrt_dt * xi; next }
+    if (!manifold) { Zc <- Zc + sg * sqrt_dt * xi; next }
     if (DRIFT) {
       db <- drift_b(Zc$detach())
-      Zc <- Zc + 0.5 * (sigv$pow(2)) * db$b * dtc + sigv * torch_rsqrt(db$G) * sqrt_dt * xi
+      Zc <- Zc + 0.5 * (sg^2) * db$b * dtc + sg * torch_rsqrt(db$G) * sqrt_dt * xi
     } else {
-      Zc <- Zc + sigv * torch_rsqrt(metric_G(Zc)) * sqrt_dt * xi
+      Zc <- Zc + sg * torch_rsqrt(metric_G(Zc)) * sqrt_dt * xi
     }
   }
   Zc$detach()
 }
 
 simulate <- function(manifold = TRUE) {
+  sg <- if (manifold) sig_man else sig_euc
   Z0 <- Zp[rep(seq_len(n_held), each = N_DRAWS), , drop = FALSE]     # M x 16
   tt <- rep(tvec, each = N_DRAWS)                                     # M
   M  <- nrow(Z0); out <- matrix(0, M, 16)
@@ -164,7 +184,7 @@ simulate <- function(manifold = TRUE) {
     en <- min(st + CHUNK - 1, M)
     Zc  <- torch_tensor(Z0[st:en, , drop = FALSE], dtype = torch_float(), device = dev)
     dtc <- torch_tensor(tt[st:en] / N_STEPS, dtype = torch_float(), device = dev)$unsqueeze(2)
-    out[st:en, ] <- as.matrix(sim_chunk(Zc, dtc, manifold)$cpu())
+    out[st:en, ] <- as.matrix(sim_chunk(Zc, dtc, manifold, sg)$cpu())
   }
   out                                               # M x 16
 }
