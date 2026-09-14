@@ -9,7 +9,8 @@
 ## Regress log(rate)~log(time) (blunderbuss beta) and log(change)~log(time)
 ## (BM ref 0.5), Euclidean vs geodesic ruler.
 ###############################################################################
-setwd("G:/Shared drives/COBL Data/Projects/deepbills")
+## Two-repo split 2026-09-14: run from the inner repo root (deepbills/deepbills/, which holds _targets.R).
+stopifnot(file.exists("_targets.R"))
 suppressMessages({library(tidyverse); library(ape); library(phyf)})
 select <- dplyr::select
 set.seed(1)

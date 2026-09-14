@@ -11,7 +11,8 @@
 ## (BM reference = 0.5); E1 Freckleton-Harvey node-height test on observed tips
 ## (model-free Euclidean signal); N2 numerator-randomization null on keystone.
 ###############################################################################
-setwd("G:/Shared drives/COBL Data/Projects/deepbills")
+## Two-repo split 2026-09-14: run from the inner repo root (deepbills/deepbills/, which holds _targets.R).
+stopifnot(file.exists("_targets.R"))
 suppressMessages({library(tidyverse); library(ape); library(phyf); library(MASS)})
 select <- dplyr::select
 dir.create("output/stasis", showWarnings = FALSE, recursive = TRUE)

@@ -15,7 +15,8 @@
 ##   G_j(z)          = 1 / (lambda + sum_i mh_i(z) * (1/var_ij))
 ## Output: output/stasis/edge_lengths.csv
 ###############################################################################
-setwd("G:/Shared drives/COBL Data/Projects/deepbills")
+## Two-repo split 2026-09-14: run from the inner repo root (deepbills/deepbills/, which holds _targets.R).
+stopifnot(file.exists("_targets.R"))
 suppressMessages({library(tidyverse)})
 dir.create("output/stasis", showWarnings = FALSE, recursive = TRUE)
 

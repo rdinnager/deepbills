@@ -5,7 +5,8 @@
 ## divergence time on flat-BM data, the "geodesic restoration" is a built-in
 ## metric artifact. If it stays flat, the real +0.39 reflects genuine structure.
 ###############################################################################
-setwd("G:/Shared drives/COBL Data/Projects/deepbills")
+## Two-repo split 2026-09-14: run from the inner repo root (deepbills/deepbills/, which holds _targets.R).
+stopifnot(file.exists("_targets.R"))
 suppressMessages({library(tidyverse); library(ape); library(phyf); library(Matrix)})
 set.seed(1)
 

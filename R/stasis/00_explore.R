@@ -1,5 +1,6 @@
 ## Explore data structures for the stasis test (CPU, no torch)
-setwd("G:/Shared drives/COBL Data/Projects/deepbills")
+## Two-repo split 2026-09-14: run from the inner repo root (deepbills/deepbills/, which holds _targets.R).
+stopifnot(file.exists("_targets.R"))
 suppressMessages({library(tidyverse)})
 
 cat("=== R3 extract (curved) ===\n")

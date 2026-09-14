@@ -2,7 +2,8 @@
 ## 05_flatbm_control.R — N4 negative control (Euclidean): does flat BM reproduce
 ## the observed straight-line divergence SATURATION? Simulate BM via VCV+chol.
 ###############################################################################
-setwd("G:/Shared drives/COBL Data/Projects/deepbills")
+## Two-repo split 2026-09-14: run from the inner repo root (deepbills/deepbills/, which holds _targets.R).
+stopifnot(file.exists("_targets.R"))
 suppressMessages({library(tidyverse); library(ape); library(phyf)})
 set.seed(1)
 bpf <- readRDS("data/bill_pf_16dim.rds"); tree <- pf_as_phylo(bpf)

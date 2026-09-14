@@ -1,7 +1,8 @@
 ###############################################################################
 ## 03_nodeheight_and_figs.R  — fix E1 node-height test + make figures F1/F2/F3
 ###############################################################################
-setwd("G:/Shared drives/COBL Data/Projects/deepbills")
+## Two-repo split 2026-09-14: run from the inner repo root (deepbills/deepbills/, which holds _targets.R).
+stopifnot(file.exists("_targets.R"))
 suppressMessages({library(tidyverse); library(ape); library(phyf); library(MASS)})
 select <- dplyr::select
 theme_set(theme_minimal(base_size = 12))

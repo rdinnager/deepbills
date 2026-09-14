@@ -1,4 +1,5 @@
-setwd("G:/Shared drives/COBL Data/Projects/deepbills")
+## Two-repo split 2026-09-14: run from the inner repo root (deepbills/deepbills/, which holds _targets.R).
+stopifnot(file.exists("_targets.R"))
 suppressMessages({library(tidyverse); library(phyf); library(ape)})
 
 r3 <- readRDS("data/v3_bayesian/bill_vae_aces_16dim_v3_bayesian.rds")
