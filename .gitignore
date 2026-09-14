@@ -67,3 +67,9 @@ test_widget.html
 # The remote is a PUBLIC repo and the paper is unpublished: drafts, the results
 # ledger, adversarial audits and sweep results stay on Drive until submission.
 manuscript/
+
+# Hub files live in the private outer folder (two-repo split, 2026-09-14).
+# Guard against a hub routine or agent writing them into this repo by mistake.
+CLAUDE.md
+TODO.md
+_meta/
